@@ -1,6 +1,6 @@
 .env
+*.bin
 /server
-server
 *.exe
 *.exe~
 *.dll

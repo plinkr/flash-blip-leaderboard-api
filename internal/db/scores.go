@@ -89,6 +89,15 @@ func (db *DB) GetTopScores(ctx context.Context, limit int) ([]models.ScoreRespon
 	return responses, nil
 }
 
+func (db *DB) IsScoreValidated(ctx context.Context, scoreID int64) (bool, error) {
+	var validated *bool
+	err := db.Pool.QueryRow(ctx, "SELECT validated FROM scores WHERE id = $1", scoreID).Scan(&validated)
+	if err != nil {
+		return false, err
+	}
+	return validated != nil && *validated, nil
+}
+
 func (db *DB) IsWithinTopN(ctx context.Context, score int64, n int) (bool, error) {
 	if n <= 0 {
 		n = 100

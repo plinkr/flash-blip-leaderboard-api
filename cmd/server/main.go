@@ -21,7 +21,7 @@ import (
 	"flash-blip-leaderboard-api/internal/validator"
 )
 
-var Version = "0.2.4"
+var Version = "0.2.5"
 
 func main() {
 	_ = godotenv.Load()
@@ -96,6 +96,8 @@ func main() {
 	)
 
 	app.Post("/scores/:id/report",
+		middleware.RateLimit(cfg.RateLimitRPM),
+		middleware.UserAgent(cfg.AllowedUserAgents),
 		rph.Submit,
 	)
 

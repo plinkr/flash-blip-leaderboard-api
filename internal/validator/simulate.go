@@ -15,10 +15,10 @@ const (
 	BaseDifficulty         = 1.0 // default initial difficulty in game.lua
 	ScoreMultiplierFactor  = 4.0
 	InternalHeight         = 160.0
-	MinCircleDist          = InternalHeight / 4.0 // 40.0
+	MinCircleDist          = InternalHeight / 4.0  // 40.0
 	AverageCircleDist      = InternalHeight * 0.35 // 56.0 (average spawn dist [0.25..0.45] * InternalHeight)
-	InitialPlayerY         = -25.0                // average of -radius where radius ~20..30
-	HeightBonusThreshold   = InternalHeight / 2.0 // 80.0
+	InitialPlayerY         = -25.0                 // average of -radius where radius ~20..30
+	HeightBonusThreshold   = InternalHeight / 2.0  // 80.0
 	HeightBonusCoefficient = 0.02
 )
 
@@ -149,9 +149,9 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 				multiplierStartTick = events[inputIdx].Tick
 			case models.INPUT_MULTIPLIER_ENDED:
 				multiplierActive = false
-		case models.INPUT_BLIP:
-			playerY = calculateNextCircleY(playerY)
-		}
+			case models.INPUT_BLIP:
+				playerY = calculateNextCircleY(playerY)
+			}
 			inputIdx++
 		}
 		// A missing end event must not extend a client-declared multiplier
@@ -187,7 +187,7 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 	// High bound accommodates legitimate high-altitude play up to 1.40x simulated score,
 	// strictly bounded by the maximum theoretical 100% top-screen limit.
 	low := max(int64(float64(simulated)*0.70)-100, int64(minimumScore*0.85))
-	high := min(int64(maximumScore), int64(float64(simulated)*1.40)+300)
+	high := min(int64(maximumScore), int64(float64(simulated)*1.50)+300)
 
 	return SimulateScoreResult{
 		SimulatedScore: simulated,

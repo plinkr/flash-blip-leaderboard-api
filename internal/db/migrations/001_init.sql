@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS reports (
     score_id        BIGINT       NOT NULL REFERENCES scores(id) ON DELETE CASCADE,
     reporter_name   VARCHAR(32),
     reason          VARCHAR(256),
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_reports_score_reporter UNIQUE (score_id, reporter_name)
 );
 
 CREATE TABLE IF NOT EXISTS used_nonces (

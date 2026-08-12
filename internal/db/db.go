@@ -2,15 +2,18 @@ package db
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
 
 type DB struct {
 	Pool *pgxpool.Pool
@@ -45,8 +48,7 @@ func (db *DB) Close() {
 }
 
 func (db *DB) RunMigrations() error {
-	migrationPath := "internal/db/migrations/001_init.sql"
-	content, err := os.ReadFile(migrationPath)
+	content, err := migrationFS.ReadFile("migrations/001_init.sql")
 	if err != nil {
 		return fmt.Errorf("failed to read migration file: %w", err)
 	}

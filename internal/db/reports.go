@@ -2,12 +2,15 @@ package db
 
 import (
 	"context"
+	"strings"
 )
 
 func (db *DB) InsertReport(ctx context.Context, scoreID int64, reporterName string, reason string) error {
+	reporterName = strings.TrimSpace(reporterName)
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO reports (score_id, reporter_name, reason, created_at)
-		VALUES ($1, $2, $3, NOW())
+		VALUES ($1, NULLIF($2, ''), $3, NOW())
+		ON CONFLICT (score_id, reporter_name) DO NOTHING
 	`, scoreID, reporterName, reason)
 	return err
 }

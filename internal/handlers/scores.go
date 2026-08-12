@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"flash-blip-leaderboard-api/internal/config"
@@ -26,6 +27,11 @@ type ScoreHandler struct {
 	Cfg    *config.Config
 	ValCfg *validator.Config
 	Tokens *security.TokenStore
+}
+
+func sanitizeLogString(s string) string {
+	r := strings.NewReplacer("\r", "", "\n", "")
+	return r.Replace(s)
 }
 
 func (h *ScoreHandler) Prepare(c *fiber.Ctx) error {
@@ -119,14 +125,14 @@ func (h *ScoreHandler) Submit(c *fiber.Ctx) error {
 
 	if err := validator.ValidateLight(h.ValCfg, events, stats, session.Metadata.Score, session.Metadata.TotalTicks); err != nil {
 		log.Printf("REPLAY_REJECT_LIGHT player=%s score=%d reason=%s blips=%d pings=%d ticks=%d ip=%s",
-			session.Metadata.PlayerName, session.Metadata.Score, err.Error(),
+			sanitizeLogString(session.Metadata.PlayerName), session.Metadata.Score, err.Error(),
 			stats.BlipCount, stats.PingCount, session.Metadata.TotalTicks, middleware.GetClientIP(c))
 		return c.Status(400).JSON(fiber.Map{"error": "replay validation failed"})
 	}
 	if session.Metadata.ReplayVersion == validator.ReplayVersionV2 {
 		if err := validator.ValidateV2(events, session.Metadata.TotalTicks); err != nil {
 			log.Printf("REPLAY_REJECT_V2 player=%s score=%d reason=%s events=%d ticks=%d ip=%s",
-				session.Metadata.PlayerName, session.Metadata.Score, err.Error(),
+				sanitizeLogString(session.Metadata.PlayerName), session.Metadata.Score, err.Error(),
 				len(events), session.Metadata.TotalTicks, middleware.GetClientIP(c))
 			return c.Status(400).JSON(fiber.Map{"error": "replay validation failed"})
 		}
