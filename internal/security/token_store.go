@@ -10,11 +10,12 @@ import (
 )
 
 type SessionMetadata struct {
-	PlayerName string  `json:"p"`
-	Score      int64   `json:"s"`
-	RNGSeed    int64   `json:"rng_seed"`
-	TotalTicks int     `json:"total_ticks"`
-	Difficulty float64 `json:"difficulty"`
+	PlayerName    string  `json:"p"`
+	Score         int64   `json:"s"`
+	RNGSeed       int64   `json:"rng_seed"`
+	TotalTicks    int     `json:"total_ticks"`
+	Difficulty    float64 `json:"difficulty"`
+	ReplayVersion int     `json:"replay_version"`
 }
 
 type TokenSession struct {

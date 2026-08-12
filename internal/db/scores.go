@@ -36,10 +36,10 @@ func (db *DB) InsertScoreWithReplay(ctx context.Context, rec ScoreRecord) (score
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO scores (player_name, score, total_ticks, client_ts, ip_address, nonce, api_key_ver)
-		VALUES ($1, $2, $3, $4, NULLIF($5, '')::inet, $6, $7)
+		INSERT INTO scores (player_name, score, total_ticks, client_ts, ip_address, nonce)
+		VALUES ($1, $2, $3, $4, NULLIF($5, '')::inet, $6)
 		RETURNING id
-	`, rec.PlayerName, rec.Score, rec.TotalTicks, rec.ClientTS, rec.IP, rec.Nonce, rec.ReplayVersion).Scan(&scoreID)
+	`, rec.PlayerName, rec.Score, rec.TotalTicks, rec.ClientTS, rec.IP, rec.Nonce).Scan(&scoreID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -127,6 +127,7 @@ func (db *DB) IsTop100(ctx context.Context, score int64) (bool, error) {
 type PendingReplayItem struct {
 	ScoreID        int64
 	Score          int64
+	ReplayVersion  int16
 	TotalTicks     int
 	RNGSeed        int64
 	BaseDifficulty float64
@@ -138,7 +139,7 @@ func (db *DB) GetPendingReplaysInTopN(ctx context.Context, n int) ([]PendingRepl
 		n = 100
 	}
 	rows, err := db.Pool.Query(ctx, `
-		SELECT s.id, s.score, r.total_ticks, r.rng_seed, r.base_difficulty, r.data
+		SELECT s.id, s.score, r.replay_version, r.total_ticks, r.rng_seed, r.base_difficulty, r.data
 		FROM scores s
 		JOIN replays r ON r.score_id = s.id
 		WHERE s.validated IS NULL
@@ -157,7 +158,7 @@ func (db *DB) GetPendingReplaysInTopN(ctx context.Context, n int) ([]PendingRepl
 	var items []PendingReplayItem
 	for rows.Next() {
 		var item PendingReplayItem
-		if err := rows.Scan(&item.ScoreID, &item.Score, &item.TotalTicks, &item.RNGSeed, &item.BaseDifficulty, &item.ReplayData); err != nil {
+		if err := rows.Scan(&item.ScoreID, &item.Score, &item.ReplayVersion, &item.TotalTicks, &item.RNGSeed, &item.BaseDifficulty, &item.ReplayData); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

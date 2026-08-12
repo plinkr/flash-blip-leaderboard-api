@@ -32,6 +32,7 @@ func (h *ReplayHandler) Download(c *fiber.Ctx) error {
 	c.Set("X-Replay-Seed", strconv.FormatInt(replay.RNGSeed, 10))
 	c.Set("X-Replay-Version", strconv.Itoa(int(replay.ReplayVersion)))
 	c.Set("X-Replay-Ticks", strconv.Itoa(replay.TotalTicks))
+	c.Set("X-Replay-Difficulty", strconv.FormatFloat(replay.BaseDifficulty, 'f', 2, 64))
 
 	return c.Send(replay.Data)
 }

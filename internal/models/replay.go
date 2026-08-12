@@ -8,9 +8,11 @@ type InputEvent struct {
 
 // Input IDs: must match the Lua client exactly
 const (
-	INPUT_NONE = uint8(0)
-	INPUT_BLIP = uint8(1) // jump to next circle
-	INPUT_PING = uint8(2) // powerup detection expansion
+	INPUT_NONE               = uint8(0)
+	INPUT_BLIP               = uint8(1) // jump to next circle
+	INPUT_PING               = uint8(2) // powerup detection expansion
+	INPUT_MULTIPLIER_STARTED = uint8(3)
+	INPUT_MULTIPLIER_ENDED   = uint8(4)
 )
 
 // ReplayMeta: replay metadata inside client JSON payload

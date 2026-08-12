@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"time"
 
@@ -41,6 +42,18 @@ func (h *ScoreHandler) Prepare(c *fiber.Ctx) error {
 	}
 	if meta.TotalTicks < 60 || meta.TotalTicks > 60*60*60 { // max 1 hour
 		return c.Status(400).JSON(fiber.Map{"error": "invalid total_ticks"})
+	}
+	if meta.ReplayVersion == 0 {
+		meta.ReplayVersion = validator.ReplayVersionV1
+	}
+	if !h.isValidReplayVersion(meta.ReplayVersion) {
+		return c.Status(400).JSON(fiber.Map{"error": "unsupported replay version"})
+	}
+	if meta.Difficulty == 0 {
+		meta.Difficulty = 1
+	}
+	if err := validator.ValidateBaseDifficulty(meta.Difficulty); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid difficulty"})
 	}
 
 	token, nonce, err := h.Tokens.Create(meta)
@@ -97,17 +110,26 @@ func (h *ScoreHandler) Submit(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "replay decompression failed"})
 	}
 
-	events, err := validator.ParseInputs(inputsRaw)
+	events, err := validator.ParseReplay(session.Metadata.ReplayVersion, inputsRaw)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "invalid replay format: " + err.Error()})
+		return c.Status(400).JSON(fiber.Map{"error": "invalid replay format"})
 	}
 
 	stats := validator.Analyze(events, session.Metadata.TotalTicks)
 
 	if err := validator.ValidateLight(h.ValCfg, events, stats, session.Metadata.Score, session.Metadata.TotalTicks); err != nil {
-		log.Printf("REPLAY_REJECT_LIGHT player=%s score=%d reason=%s ip=%s",
-			session.Metadata.PlayerName, session.Metadata.Score, err.Error(), middleware.GetClientIP(c))
-		return c.Status(400).JSON(fiber.Map{"error": "replay validation failed: " + err.Error()})
+		log.Printf("REPLAY_REJECT_LIGHT player=%s score=%d reason=%s blips=%d pings=%d ticks=%d ip=%s",
+			session.Metadata.PlayerName, session.Metadata.Score, err.Error(),
+			stats.BlipCount, stats.PingCount, session.Metadata.TotalTicks, middleware.GetClientIP(c))
+		return c.Status(400).JSON(fiber.Map{"error": "replay validation failed"})
+	}
+	if session.Metadata.ReplayVersion == validator.ReplayVersionV2 {
+		if err := validator.ValidateV2(events, session.Metadata.TotalTicks); err != nil {
+			log.Printf("REPLAY_REJECT_V2 player=%s score=%d reason=%s events=%d ticks=%d ip=%s",
+				session.Metadata.PlayerName, session.Metadata.Score, err.Error(),
+				len(events), session.Metadata.TotalTicks, middleware.GetClientIP(c))
+			return c.Status(400).JSON(fiber.Map{"error": "replay validation failed"})
+		}
 	}
 
 	scoreID, replayID, err := h.DB.InsertScoreWithReplay(c.Context(), db.ScoreRecord{
@@ -117,7 +139,7 @@ func (h *ScoreHandler) Submit(c *fiber.Ctx) error {
 		ClientTS:       time.Now().Unix(),
 		IP:             middleware.GetClientIP(c),
 		Nonce:          session.Nonce,
-		ReplayVersion:  1,
+		ReplayVersion:  session.Metadata.ReplayVersion,
 		RNGSeed:        session.Metadata.RNGSeed,
 		BaseDifficulty: session.Metadata.Difficulty,
 		ReplayData:     compressedInputs,
@@ -132,7 +154,7 @@ func (h *ScoreHandler) Submit(c *fiber.Ctx) error {
 	}
 
 	// Full asynchronous validation if candidate for leaderboard
-	go h.asyncValidateCandidate(scoreID, session.Metadata.Score, events, session.Metadata.TotalTicks, session.Metadata.RNGSeed, session.Metadata.Difficulty)
+	go h.asyncValidateCandidate(scoreID, session.Metadata.Score, events, session.Metadata.ReplayVersion, session.Metadata.TotalTicks, session.Metadata.RNGSeed, session.Metadata.Difficulty)
 
 	return c.Status(201).JSON(fiber.Map{
 		"ok":        true,
@@ -141,7 +163,7 @@ func (h *ScoreHandler) Submit(c *fiber.Ctx) error {
 	})
 }
 
-func (h *ScoreHandler) asyncValidateCandidate(scoreID int64, claimedScore int64, events []models.InputEvent, totalTicks int, rngSeed int64, baseDifficulty float64) {
+func (h *ScoreHandler) asyncValidateCandidate(scoreID int64, claimedScore int64, events []models.InputEvent, replayVersion int, totalTicks int, rngSeed int64, baseDifficulty float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -155,14 +177,22 @@ func (h *ScoreHandler) asyncValidateCandidate(scoreID int64, claimedScore int64,
 		return // not in top, remains NULL (pending)
 	}
 
-	result := validator.SimulateScore(events, totalTicks, rngSeed, claimedScore, baseDifficulty)
+	result, err := validator.SimulateReplay(replayVersion, events, totalTicks, rngSeed, claimedScore, baseDifficulty)
+	if err != nil {
+		log.Printf("REPLAY_REJECT_SIM scoreID=%d claimed=%d reason=%s version=%d ticks=%d difficulty=%.2f",
+			scoreID, claimedScore, err.Error(), replayVersion, totalTicks, baseDifficulty)
+		h.markReplayInvalid(scoreID, err.Error())
+		return
+	}
 
 	if result.Valid {
 		if err := h.DB.MarkValidated(ctx, scoreID, true, "", result.SimulatedScore); err != nil {
 			log.Printf("ERROR: failed to mark score %d as validated: %v", scoreID, err)
 			return
 		}
-		log.Printf("REPLAY_VALID scoreID=%d claimed=%d simulated=%d", scoreID, claimedScore, result.SimulatedScore)
+		log.Printf("REPLAY_VALID scoreID=%d claimed=%d simulated=%d tolerance=[%d,%d] diff=%d",
+			scoreID, claimedScore, result.SimulatedScore, result.ToleranceLow, result.ToleranceHigh,
+			int64(math.Abs(float64(claimedScore-result.SimulatedScore))))
 	} else {
 		reason := fmt.Sprintf("simulated=%d range=[%d,%d] claimed=%d",
 			result.SimulatedScore, result.ToleranceLow, result.ToleranceHigh, claimedScore)
@@ -171,7 +201,9 @@ func (h *ScoreHandler) asyncValidateCandidate(scoreID int64, claimedScore int64,
 			log.Printf("ERROR: failed to mark score %d as invalid (reason: %s): %v", scoreID, reason, err)
 			return
 		}
-		log.Printf("REPLAY_REJECT_SIM scoreID=%d %s", scoreID, reason)
+		log.Printf("REPLAY_REJECT_SIM scoreID=%d claimed=%d simulated=%d tolerance=[%d,%d] diff=%d",
+			scoreID, claimedScore, result.SimulatedScore, result.ToleranceLow, result.ToleranceHigh,
+			int64(math.Abs(float64(claimedScore-result.SimulatedScore))))
 	}
 
 }
@@ -256,35 +288,74 @@ func (h *ScoreHandler) sweepPendingReplays() {
 	}
 
 	for _, item := range items {
+		if !h.isValidReplayVersion(int(item.ReplayVersion)) {
+			log.Printf("SWEEP_SKIP scoreID=%d reason=unsupported_version version=%d", item.ScoreID, item.ReplayVersion)
+			h.markReplayInvalid(item.ScoreID, "unsupported replay version")
+			continue
+		}
+
 		inputsRaw, err := decompressLove2DLZ4(item.ReplayData)
 		if err != nil {
 			log.Printf("SWEEPER_ERROR: failed lz4 decompression for scoreID %d: %v", item.ScoreID, err)
+			h.markReplayInvalid(item.ScoreID, err.Error())
 			continue
 		}
 
-		events, err := validator.ParseInputs(inputsRaw)
+		events, err := validator.ParseReplay(int(item.ReplayVersion), inputsRaw)
 		if err != nil {
 			log.Printf("SWEEPER_ERROR: invalid replay format for scoreID %d: %v", item.ScoreID, err)
+			h.markReplayInvalid(item.ScoreID, err.Error())
 			continue
 		}
 
-		result := validator.SimulateScore(events, item.TotalTicks, item.RNGSeed, item.Score, item.BaseDifficulty)
+		result, err := validator.SimulateReplay(int(item.ReplayVersion), events, item.TotalTicks, item.RNGSeed, item.Score, item.BaseDifficulty)
+		if err != nil {
+			log.Printf("SWEEPER_ERROR: invalid replay for scoreID %d: %v", item.ScoreID, err)
+			h.markReplayInvalid(item.ScoreID, err.Error())
+			continue
+		}
 		if result.Valid {
-			if err := h.DB.MarkValidated(ctx, item.ScoreID, true, "", result.SimulatedScore); err != nil {
-				log.Printf("SWEEPER_ERROR: failed to mark score %d validated: %v", item.ScoreID, err)
-			} else {
+			if h.markReplayValidated(item.ScoreID, true, "", result.SimulatedScore) {
 				log.Printf("SWEEPER_VALID scoreID=%d claimed=%d simulated=%d", item.ScoreID, item.Score, result.SimulatedScore)
+			} else {
+				log.Printf("SWEEPER_ERROR: failed to mark score %d validated", item.ScoreID)
 			}
 		} else {
 			reason := fmt.Sprintf("simulated=%d range=[%d,%d] claimed=%d",
 				result.SimulatedScore, result.ToleranceLow, result.ToleranceHigh, item.Score)
-			if err := h.DB.MarkValidated(ctx, item.ScoreID, false, reason, result.SimulatedScore); err != nil {
-				log.Printf("SWEEPER_ERROR: failed to mark score %d invalid: %v", item.ScoreID, err)
-			} else {
+			if h.markReplayValidated(item.ScoreID, false, reason, result.SimulatedScore) {
 				log.Printf("SWEEPER_REJECT_SIM scoreID=%d %s", item.ScoreID, reason)
+			} else {
+				log.Printf("SWEEPER_ERROR: failed to mark score %d invalid", item.ScoreID)
 			}
 		}
 	}
+}
+
+func (h *ScoreHandler) getMaxReplayVersion() int {
+	if h.ValCfg != nil && h.ValCfg.MaxReplayVersion > 0 {
+		return h.ValCfg.MaxReplayVersion
+	}
+	return validator.ReplayVersionV2
+}
+
+func (h *ScoreHandler) isValidReplayVersion(version int) bool {
+	return version >= validator.ReplayVersionV1 && version <= h.getMaxReplayVersion()
+}
+
+func (h *ScoreHandler) markReplayInvalid(scoreID int64, reason string) {
+	h.markReplayValidated(scoreID, false, reason, 0)
+}
+
+func (h *ScoreHandler) markReplayValidated(scoreID int64, validated bool, reason string, simulatedScore int64) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := h.DB.MarkValidated(ctx, scoreID, validated, reason, simulatedScore); err != nil {
+		log.Printf("ERROR: failed to mark score %d as invalid: %v", scoreID, err)
+		return false
+	}
+	return true
 }
 
 func decompressLove2DLZ4(compressedData []byte) ([]byte, error) {

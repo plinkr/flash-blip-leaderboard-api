@@ -3,6 +3,7 @@ package validator
 import (
 	"encoding/binary"
 	"flash-blip-leaderboard-api/internal/models"
+	"math"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 		{Tick: 70, InputID: models.INPUT_BLIP},
 	}
 
-	totalTicks := 100
+	totalTicks := 120
 	stats := Analyze(events, totalTicks)
 
 	if stats.BlipCount != 4 {
@@ -129,6 +130,146 @@ func TestSimulateScore(t *testing.T) {
 	if resultHigher.SimulatedScore <= result.SimulatedScore {
 		t.Errorf("expected higher difficulty (2.5) to yield a higher score than default (1.0), got %d <= %d", resultHigher.SimulatedScore, result.SimulatedScore)
 	}
+}
+
+func TestParseAndValidateReplayV2(t *testing.T) {
+	raw := []byte{'F', 'B', 'R', 'P', 2, 1, 0, 0}
+	appendEvent := func(tick uint32, inputID uint8) {
+		entry := make([]byte, 5)
+		binary.LittleEndian.PutUint32(entry[:4], tick)
+		entry[4] = inputID
+		raw = append(raw, entry...)
+	}
+	appendEvent(10, models.INPUT_MULTIPLIER_STARTED)
+	appendEvent(100, models.INPUT_MULTIPLIER_ENDED)
+
+	events, err := ParseReplay(ReplayVersionV2, raw)
+	if err != nil {
+		t.Fatalf("failed to parse v2 replay: %v", err)
+	}
+	if err := ValidateV2(events, 600); err != nil {
+		t.Fatalf("valid v2 replay rejected: %v", err)
+	}
+
+	bad := append([]models.InputEvent(nil), events...)
+	bad[0].InputID = models.INPUT_MULTIPLIER_ENDED
+	if err := ValidateV2(bad, 600); err == nil {
+		t.Fatal("expected inactive multiplier transition to be rejected")
+	}
+}
+
+func TestValidateV2MultiplierLifetime(t *testing.T) {
+	withinWindow := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}}
+	if err := ValidateV2(withinWindow, MaxMultiplierTicks+1); err != nil {
+		t.Fatalf("expected an omitted end event within the lifetime to pass: %v", err)
+	}
+
+	tooLong := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}}
+	if err := ValidateV2(tooLong, MaxMultiplierTicks+2); err == nil {
+		t.Fatal("expected an omitted end event past the lifetime to fail")
+	}
+
+	refresh := []models.InputEvent{
+		{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED},
+		{Tick: 2, InputID: models.INPUT_MULTIPLIER_STARTED},
+	}
+	if err := ValidateV2(refresh, 60); err == nil {
+		t.Fatal("expected multiplier refresh without an end event to fail")
+	}
+}
+
+func TestParseReplayV2RejectsReservedHeaderAndNoneInput(t *testing.T) {
+	baseHeader := []byte{'F', 'B', 'R', 'P', 2, 1, 0, 0}
+	reserved := append([]byte(nil), baseHeader...)
+	reserved[6] = 1
+	if _, err := ParseReplay(ReplayVersionV2, reserved); err == nil {
+		t.Fatal("expected non-zero reserved header byte to fail")
+	}
+
+	withNone := append([]byte(nil), baseHeader...)
+	withNone = append(withNone, []byte{1, 0, 0, 0, models.INPUT_NONE}...)
+	if _, err := ParseReplay(ReplayVersionV2, withNone); err == nil {
+		t.Fatal("expected INPUT_NONE to fail in v2")
+	}
+}
+
+func TestSimulateReplayV2MultiplierWindow(t *testing.T) {
+	baseEvents := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}, {Tick: 31, InputID: models.INPUT_MULTIPLIER_ENDED}}
+	noMultiplier := simulateScoreV2ForTest(t, nil, 60)
+	withMultiplier := simulateScoreV2ForTest(t, baseEvents, 60)
+
+	if withMultiplier.SimulatedScore <= noMultiplier.SimulatedScore {
+		t.Fatalf("multiplier did not increase score: no=%d with=%d", noMultiplier.SimulatedScore, withMultiplier.SimulatedScore)
+	}
+	if withMultiplier.ToleranceHigh >= int64(float64(noMultiplier.ToleranceHigh)*4) {
+		t.Fatalf("v2 bound incorrectly grants a whole-run multiplier: no=%d with=%d", noMultiplier.ToleranceHigh, withMultiplier.ToleranceHigh)
+	}
+	// Golden values updated for accurate height-bonus simulation
+	if noMultiplier.SimulatedScore != 76 || withMultiplier.SimulatedScore != 225 {
+		t.Fatalf("unexpected v2 golden scores: no=%d with=%d", noMultiplier.SimulatedScore, withMultiplier.SimulatedScore)
+	}
+}
+
+func TestSimulateReplayV2HighAltitudeAndTolerance(t *testing.T) {
+	// Generate events where player blips every 30 ticks for 3000 ticks (50 seconds).
+	// Player stays high in the screen (playerY < 30), so height bonus average > 1.0.
+	totalTicks := 3000
+	var events []models.InputEvent
+	for tick := 30; tick < totalTicks; tick += 30 {
+		events = append(events, models.InputEvent{
+			Tick:    uint32(tick),
+			InputID: models.INPUT_BLIP,
+		})
+	}
+
+	// 1. Valid run where claimed score equals simulated score
+	// In the old implementation (hardcoded +1.0 max bonus), high altitude runs exceeded maximumScore
+	// and were falsely rejected. Centering tolerance on simulatedScore fixes this false rejection.
+	simResult, err := SimulateReplay(ReplayVersionV2, events, totalTicks, 42, 0, 1.0)
+	if err != nil {
+		t.Fatalf("unexpected error simulating V2 high altitude replay: %v", err)
+	}
+
+	claimedScore := simResult.SimulatedScore
+	resultValid, err := SimulateReplay(ReplayVersionV2, events, totalTicks, 42, claimedScore, 1.0)
+	if err != nil {
+		t.Fatalf("unexpected error simulating V2 high altitude replay: %v", err)
+	}
+	if !resultValid.Valid {
+		t.Fatalf("legitimate high-altitude replay was falsely rejected: claimed=%d simulated=%d bounds=[%d, %d]",
+			claimedScore, resultValid.SimulatedScore, resultValid.ToleranceLow, resultValid.ToleranceHigh)
+	}
+
+	// 2. Cheater claiming score far above upper tolerance
+	inflatedScore := resultValid.ToleranceHigh + 1000
+	resultCheaterHigh, err := SimulateReplay(ReplayVersionV2, events, totalTicks, 42, inflatedScore, 1.0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resultCheaterHigh.Valid {
+		t.Fatalf("cheater score (%d) was accepted; expected failure against upper tolerance %d",
+			inflatedScore, resultCheaterHigh.ToleranceHigh)
+	}
+
+	// 3. Score far below lower tolerance
+	deflatedScore := resultValid.ToleranceLow - 500
+	resultCheaterLow, err := SimulateReplay(ReplayVersionV2, events, totalTicks, 42, deflatedScore, 1.0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resultCheaterLow.Valid {
+		t.Fatalf("deflated score (%d) was accepted; expected failure against lower tolerance %d",
+			deflatedScore, resultCheaterLow.ToleranceLow)
+	}
+}
+
+func simulateScoreV2ForTest(t *testing.T, events []models.InputEvent, totalTicks int) SimulateScoreResult {
+	t.Helper()
+	result, err := SimulateReplay(ReplayVersionV2, events, totalTicks, 42, 100, 1)
+	if err != nil {
+		t.Fatalf("v2 simulation failed: %v", err)
+	}
+	return result
 }
 
 func TestMechanicalTimingSeparation(t *testing.T) {
@@ -249,5 +390,21 @@ func TestMaxBlipsAndPingsPerMinute(t *testing.T) {
 	badPingStats := Analyze(badPingEvents, 600)
 	if err := ValidateLight(cfg, badPingEvents, badPingStats, 100, 600); err == nil {
 		t.Error("expected validation to fail when ping rate exceeds MaxPingsPerMinute")
+	}
+}
+
+func TestValidateBaseDifficulty(t *testing.T) {
+	valid := []float64{1.0, 2.0, 3.5}
+	for _, diff := range valid {
+		if err := ValidateBaseDifficulty(diff); err != nil {
+			t.Errorf("expected difficulty %f to be valid, got: %v", diff, err)
+		}
+	}
+
+	invalid := []float64{0.9, 3.6, -1.0, math.NaN(), math.Inf(1)}
+	for _, diff := range invalid {
+		if err := ValidateBaseDifficulty(diff); err == nil {
+			t.Errorf("expected difficulty %f to be invalid", diff)
+		}
 	}
 }
