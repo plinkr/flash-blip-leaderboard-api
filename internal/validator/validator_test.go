@@ -26,11 +26,11 @@ func TestParseInputs(t *testing.T) {
 		t.Fatalf("expected 2 events, got %d", len(events))
 	}
 
-	if events[0].Tick != 100 || events[0].InputID != models.INPUT_BLIP {
+	if events[0].Tick != 100 || events[0].InputID != models.InputBlip {
 		t.Errorf("event 0 incorrect: %+v", events[0])
 	}
 
-	if events[1].Tick != 120 || events[1].InputID != models.INPUT_PING {
+	if events[1].Tick != 120 || events[1].InputID != models.InputPing {
 		t.Errorf("event 1 incorrect: %+v", events[1])
 	}
 }
@@ -40,10 +40,10 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 
 	// Create a valid list of inputs (intervals of 20 ticks, which is 333ms)
 	events := []models.InputEvent{
-		{Tick: 10, InputID: models.INPUT_BLIP},
-		{Tick: 30, InputID: models.INPUT_BLIP},
-		{Tick: 50, InputID: models.INPUT_BLIP},
-		{Tick: 70, InputID: models.INPUT_BLIP},
+		{Tick: 10, InputID: models.InputBlip},
+		{Tick: 30, InputID: models.InputBlip},
+		{Tick: 50, InputID: models.InputBlip},
+		{Tick: 70, InputID: models.InputBlip},
 	}
 
 	totalTicks := 120
@@ -60,8 +60,8 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 
 	// Decreasing ticks should fail
 	badEvents := []models.InputEvent{
-		{Tick: 10, InputID: models.INPUT_BLIP},
-		{Tick: 9, InputID: models.INPUT_BLIP},
+		{Tick: 10, InputID: models.InputBlip},
+		{Tick: 9, InputID: models.InputBlip},
 	}
 	badStats := Analyze(badEvents, totalTicks)
 	err = ValidateLight(cfg, badEvents, badStats, 100, totalTicks)
@@ -71,8 +71,8 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 
 	// Same-tick/overlapping events should pass
 	sameTickEvents := []models.InputEvent{
-		{Tick: 10, InputID: models.INPUT_BLIP},
-		{Tick: 10, InputID: models.INPUT_PING},
+		{Tick: 10, InputID: models.InputBlip},
+		{Tick: 10, InputID: models.InputPing},
 	}
 	sameTickStats := Analyze(sameTickEvents, totalTicks)
 	err = ValidateLight(cfg, sameTickEvents, sameTickStats, 100, totalTicks)
@@ -82,7 +82,7 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 
 	// Ticks exceeding totalTicks should fail
 	badEvents2 := []models.InputEvent{
-		{Tick: 150, InputID: models.INPUT_BLIP},
+		{Tick: 150, InputID: models.InputBlip},
 	}
 	badStats2 := Analyze(badEvents2, totalTicks)
 	err = ValidateLight(cfg, badEvents2, badStats2, 100, totalTicks)
@@ -104,9 +104,9 @@ func TestValidateLightAndAnalyze(t *testing.T) {
 func TestSimulateScore(t *testing.T) {
 	// Let's simulate a run with some inputs
 	events := []models.InputEvent{
-		{Tick: 10, InputID: models.INPUT_BLIP},
-		{Tick: 150, InputID: models.INPUT_BLIP},
-		{Tick: 300, InputID: models.INPUT_BLIP},
+		{Tick: 10, InputID: models.InputBlip},
+		{Tick: 150, InputID: models.InputBlip},
+		{Tick: 300, InputID: models.InputBlip},
 	}
 
 	totalTicks := 600 // 10 seconds of gameplay
@@ -140,8 +140,8 @@ func TestParseAndValidateReplayV2(t *testing.T) {
 		entry[4] = inputID
 		raw = append(raw, entry...)
 	}
-	appendEvent(10, models.INPUT_MULTIPLIER_STARTED)
-	appendEvent(100, models.INPUT_MULTIPLIER_ENDED)
+	appendEvent(10, models.InputMultiplierStarted)
+	appendEvent(100, models.InputMultiplierEnded)
 
 	events, err := ParseReplay(ReplayVersionV2, raw)
 	if err != nil {
@@ -152,26 +152,26 @@ func TestParseAndValidateReplayV2(t *testing.T) {
 	}
 
 	bad := append([]models.InputEvent(nil), events...)
-	bad[0].InputID = models.INPUT_MULTIPLIER_ENDED
+	bad[0].InputID = models.InputMultiplierEnded
 	if err := ValidateV2(bad, 600); err == nil {
 		t.Fatal("expected inactive multiplier transition to be rejected")
 	}
 }
 
 func TestValidateV2MultiplierLifetime(t *testing.T) {
-	withinWindow := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}}
+	withinWindow := []models.InputEvent{{Tick: 1, InputID: models.InputMultiplierStarted}}
 	if err := ValidateV2(withinWindow, MaxMultiplierTicks+1); err != nil {
 		t.Fatalf("expected an omitted end event within the lifetime to pass: %v", err)
 	}
 
-	tooLong := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}}
+	tooLong := []models.InputEvent{{Tick: 1, InputID: models.InputMultiplierStarted}}
 	if err := ValidateV2(tooLong, MaxMultiplierTicks+2); err == nil {
 		t.Fatal("expected an omitted end event past the lifetime to fail")
 	}
 
 	refresh := []models.InputEvent{
-		{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED},
-		{Tick: 2, InputID: models.INPUT_MULTIPLIER_STARTED},
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: 2, InputID: models.InputMultiplierStarted},
 	}
 	if err := ValidateV2(refresh, 60); err == nil {
 		t.Fatal("expected multiplier refresh without an end event to fail")
@@ -187,14 +187,14 @@ func TestParseReplayV2RejectsReservedHeaderAndNoneInput(t *testing.T) {
 	}
 
 	withNone := append([]byte(nil), baseHeader...)
-	withNone = append(withNone, []byte{1, 0, 0, 0, models.INPUT_NONE}...)
+	withNone = append(withNone, []byte{1, 0, 0, 0, models.InputNone}...)
 	if _, err := ParseReplay(ReplayVersionV2, withNone); err == nil {
 		t.Fatal("expected INPUT_NONE to fail in v2")
 	}
 }
 
 func TestSimulateReplayV2MultiplierWindow(t *testing.T) {
-	baseEvents := []models.InputEvent{{Tick: 1, InputID: models.INPUT_MULTIPLIER_STARTED}, {Tick: 31, InputID: models.INPUT_MULTIPLIER_ENDED}}
+	baseEvents := []models.InputEvent{{Tick: 1, InputID: models.InputMultiplierStarted}, {Tick: 31, InputID: models.InputMultiplierEnded}}
 	noMultiplier := simulateScoreV2ForTest(t, nil, 60)
 	withMultiplier := simulateScoreV2ForTest(t, baseEvents, 60)
 
@@ -218,7 +218,7 @@ func TestSimulateReplayV2HighAltitudeAndTolerance(t *testing.T) {
 	for tick := 30; tick < totalTicks; tick += 30 {
 		events = append(events, models.InputEvent{
 			Tick:    uint32(tick),
-			InputID: models.INPUT_BLIP,
+			InputID: models.InputBlip,
 		})
 	}
 
@@ -284,7 +284,7 @@ func TestMechanicalTimingSeparation(t *testing.T) {
 	for i := range blipEvents {
 		blipEvents[i] = models.InputEvent{
 			Tick:    uint32(i * 10),
-			InputID: models.INPUT_BLIP,
+			InputID: models.InputBlip,
 		}
 	}
 	statsBlip := Analyze(blipEvents, 1000)
@@ -299,7 +299,7 @@ func TestMechanicalTimingSeparation(t *testing.T) {
 	for i := range pingEvents {
 		pingEvents[i] = models.InputEvent{
 			Tick:    uint32(i * 10),
-			InputID: models.INPUT_PING,
+			InputID: models.InputPing,
 		}
 	}
 	statsPing := Analyze(pingEvents, 1000)
@@ -318,7 +318,7 @@ func TestMechanicalTimingSeparation(t *testing.T) {
 	for i := range 25 {
 		mixedEvents[i] = models.InputEvent{
 			Tick:    tick,
-			InputID: models.INPUT_BLIP,
+			InputID: models.InputBlip,
 		}
 		tick += uint32(i + 5) // interval varies: 5, 6, 7, ...
 	}
@@ -326,7 +326,7 @@ func TestMechanicalTimingSeparation(t *testing.T) {
 	for i := range 25 {
 		mixedEvents[25+i] = models.InputEvent{
 			Tick:    tick + uint32(i*10),
-			InputID: models.INPUT_PING,
+			InputID: models.InputPing,
 		}
 	}
 	statsMixed := Analyze(mixedEvents, 2000)
@@ -349,13 +349,13 @@ func TestMaxBlipsAndPingsPerMinute(t *testing.T) {
 	// 4 pings/sec * 10s = 40 pings (which is 240 pings/min, max is 300)
 	events := make([]models.InputEvent, 0, 60)
 	for i := range 60 {
-		inputId := models.INPUT_PING
+		inputID := models.InputPing
 		if i%3 == 0 {
-			inputId = models.INPUT_BLIP
+			inputID = models.InputBlip
 		}
 		events = append(events, models.InputEvent{
 			Tick:    uint32(i * 10), // distributed across 600 ticks
-			InputID: inputId,
+			InputID: inputID,
 		})
 	}
 
@@ -370,7 +370,7 @@ func TestMaxBlipsAndPingsPerMinute(t *testing.T) {
 	for i := range 40 {
 		badBlipEvents = append(badBlipEvents, models.InputEvent{
 			Tick:    uint32(i * 15),
-			InputID: models.INPUT_BLIP,
+			InputID: models.InputBlip,
 		})
 	}
 	badBlipStats := Analyze(badBlipEvents, 600)
@@ -384,7 +384,7 @@ func TestMaxBlipsAndPingsPerMinute(t *testing.T) {
 	for i := range 60 {
 		badPingEvents = append(badPingEvents, models.InputEvent{
 			Tick:    uint32(i * 10),
-			InputID: models.INPUT_PING,
+			InputID: models.InputPing,
 		})
 	}
 	badPingStats := Analyze(badPingEvents, 600)

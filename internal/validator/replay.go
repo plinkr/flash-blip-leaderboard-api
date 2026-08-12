@@ -87,7 +87,7 @@ func parseReplayV2(rawBytes []byte) ([]models.InputEvent, error) {
 			Tick:    binary.LittleEndian.Uint32(rawBytes[offset : offset+4]),
 			InputID: rawBytes[offset+4],
 		}
-		if events[i].InputID < models.INPUT_BLIP || events[i].InputID > models.INPUT_MULTIPLIER_ENDED {
+		if events[i].InputID < models.InputBlip || events[i].InputID > models.InputMultiplierEnded {
 			return nil, fmt.Errorf("unknown input id %d at index %d", events[i].InputID, i)
 		}
 	}
@@ -118,14 +118,14 @@ func ValidateV2(events []models.InputEvent, totalTicks int) error {
 		}
 
 		switch event.InputID {
-		case models.INPUT_BLIP, models.INPUT_PING:
-		case models.INPUT_MULTIPLIER_STARTED:
+		case models.InputBlip, models.InputPing:
+		case models.InputMultiplierStarted:
 			if multiplierActive {
 				return fmt.Errorf("multiplier started while already active at index %d", i)
 			}
 			multiplierActive = true
 			multiplierStartTick = event.Tick
-		case models.INPUT_MULTIPLIER_ENDED:
+		case models.InputMultiplierEnded:
 			if !multiplierActive {
 				return fmt.Errorf("multiplier ended while inactive at index %d", i)
 			}
@@ -161,7 +161,7 @@ func ParseInputs(rawBytes []byte) ([]models.InputEvent, error) {
 }
 
 // Analyze calculates statistics over input stream
-func Analyze(events []models.InputEvent, totalTicks int) models.ReplayStats {
+func Analyze(events []models.InputEvent, _ int) models.ReplayStats {
 	stats := models.ReplayStats{
 		TotalInputs:     len(events),
 		MinTickInterval: math.MaxInt32,
@@ -173,7 +173,7 @@ func Analyze(events []models.InputEvent, totalTicks int) models.ReplayStats {
 	pingIntervalCounts := make(map[int]int) // to detect repetitive patterns in PINGs
 
 	for _, e := range events {
-		if e.InputID == models.INPUT_BLIP {
+		if e.InputID == models.InputBlip {
 			stats.BlipCount++
 			if lastBlipTick != -1 {
 				interval := int(e.Tick) - lastBlipTick
@@ -187,7 +187,7 @@ func Analyze(events []models.InputEvent, totalTicks int) models.ReplayStats {
 				blipIntervalCounts[interval]++
 			}
 			lastBlipTick = int(e.Tick)
-		} else if e.InputID == models.INPUT_PING {
+		} else if e.InputID == models.InputPing {
 			stats.PingCount++
 			if lastPingTick != -1 {
 				interval := int(e.Tick) - lastPingTick
@@ -219,7 +219,7 @@ func Analyze(events []models.InputEvent, totalTicks int) models.ReplayStats {
 }
 
 // ValidateLight fast O(n) validation, runs synchronously in the request
-func ValidateLight(cfg *Config, events []models.InputEvent, stats models.ReplayStats, claimedScore int64, totalTicks int) error {
+func ValidateLight(cfg *Config, events []models.InputEvent, stats models.ReplayStats, _ int64, totalTicks int) error {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}

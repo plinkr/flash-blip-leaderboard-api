@@ -6,21 +6,57 @@ import (
 	"math"
 )
 
-// FLASH-BLIP constants: extracted from game/game.lua and game/main.lua
-// Update if game logic changes (requires replay_version bump)
+// FLASH-BLIP constants
 const (
 	BaseScrollSpeed        = 0.08
 	TicksPerUnit           = 3600.0
 	DifficultyScale        = 1.5
-	BaseDifficulty         = 1.0 // default initial difficulty in game.lua
+	BaseDifficulty         = 1.0 // default initial difficulty
 	ScoreMultiplierFactor  = 4.0
 	InternalHeight         = 160.0
-	MinCircleDist          = InternalHeight / 4.0  // 40.0
-	AverageCircleDist      = InternalHeight * 0.35 // 56.0 (average spawn dist [0.25..0.45] * InternalHeight)
-	InitialPlayerY         = -25.0                 // average of -radius where radius ~20..30
-	HeightBonusThreshold   = InternalHeight / 2.0  // 80.0
+	MinCircleDist          = InternalHeight / 4.0 // 40.0
+	InitialPlayerY         = -25.0                // average of -radius where radius ~20..30
+	HeightBonusThreshold   = InternalHeight / 2.0 // 80.0
 	HeightBonusCoefficient = 0.02
 )
+
+// LoveRNG reproduces Love2D's love.math.RandomGenerator (PCG32)
+type LoveRNG struct {
+	state uint64
+	inc   uint64
+}
+
+func NewLoveRNG(seed uint64) *LoveRNG {
+	r := &LoveRNG{}
+	r.SetSeed(seed)
+	return r
+}
+
+func (r *LoveRNG) SetSeed(seed uint64) {
+	r.state = 0
+	r.inc = ((seed >> 32) << 1) | 1
+	r.nextUint32()
+	r.state += seed & 0xFFFFFFFF
+	r.nextUint32()
+}
+
+func (r *LoveRNG) nextUint32() uint32 {
+	oldstate := r.state
+	r.state = oldstate*6364136223846793005 + r.inc
+	xorshifted := uint32(((oldstate >> 18) ^ oldstate) >> 27)
+	rot := uint32(oldstate >> 59)
+	return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
+}
+
+func (r *LoveRNG) RandomFloat() float64 {
+	return float64(r.nextUint32()) / 4294967296.0
+}
+
+func (r *LoveRNG) CircleDistance() float64 {
+	minDist := MinCircleDist
+	maxDist := InternalHeight * 0.45
+	return minDist + r.RandomFloat()*(maxDist-minDist)
+}
 
 // SimulateScoreResult contains the simulation result
 type SimulateScoreResult struct {
@@ -40,40 +76,46 @@ func SimulateScore(events []models.InputEvent, totalTicks int, rngSeed int64, cl
 
 	var (
 		score          float64
-		playerY        = InitialPlayerY // starts at first circle position (y ≈ -radius)
+		playerY        = InitialPlayerY // starts at first circle position (-radius)
 		minTheoretical float64
 		maxTheoretical float64
+		inputIdx       int
+		lastActionTick = -1000
 	)
 
-	inputIdx := 0
+	rng := NewLoveRNG(uint64(rngSeed))
 
 	for tick := 1; tick <= totalTicks; tick++ {
-		difficulty := difficultyAtTick(tick, baseDifficulty)
-
-		hasBlip := false
 		for inputIdx < len(events) && int(events[inputIdx].Tick) == tick {
-			if events[inputIdx].InputID == models.INPUT_BLIP {
-				hasBlip = true
+			switch events[inputIdx].InputID {
+			case models.InputBlip:
+				lastActionTick = tick
+				dist := rng.CircleDistance()
+				playerY = math.Max(-50.0, playerY-dist)
+			case models.InputPing:
+				lastActionTick = tick
+				playerY = math.Max(-50.0, playerY-18.0)
 			}
 			inputIdx++
 		}
 
-		baseSpeedForScore := calculateBaseSpeed(difficulty, playerY)
+		effectiveY := playerY
+		if tick-lastActionTick < 90 {
+			effectiveY = math.Max(-30.0, playerY*0.5)
+		}
 
+		difficulty := difficultyAtTick(tick, baseDifficulty)
+
+		baseSpeedForScore := calculateBaseSpeed(difficulty, effectiveY)
 		score += baseSpeedForScore
 
 		// Absolute minimum: player does not jump (at bottom), without multipliers
 		minTheoretical += difficulty * BaseScrollSpeed
 
-		// Absolute maximum: player stays at top (y ≈ -25 -> bonus ≈ 2.1) and has 4x multiplier active 100% of the time
+		// Absolute maximum: player stays at top (y is approx -25 -> bonus = 2.1) and has 4x multiplier active 100% of the time
 		maxTheoretical += (difficulty*BaseScrollSpeed + 2.1) * ScoreMultiplierFactor
 
 		playerY += baseSpeedForScore
-
-		if hasBlip {
-			playerY = calculateNextCircleY(playerY)
-		}
-
 		if playerY > InternalHeight {
 			playerY = InternalHeight
 		}
@@ -81,26 +123,15 @@ func SimulateScore(events []models.InputEvent, totalTicks int, rngSeed int64, cl
 
 	simulated := int64(score)
 	minTheoreticalVal := int64(minTheoretical)
+	maxTheoreticalVal := int64(maxTheoretical)
 
-	// Dynamic tolerance based on simulated score.
-	// V1 replays lack multiplier events, so we estimate with heuristics.
-	// Use a tighter tolerance since the simulation tracks playerY trajectory.
-	low := max(int64(float64(simulated)*0.85)-100, 0)
-	high := int64(float64(simulated)*1.25) + 300 // Allow variance for missing multiplier data
+	// V1 replays do not log explicit multiplier events, so simulated score estimates base score (1x).
+	// Claimed score can be higher due to 4x multiplier powerups.
+	low := max(int64(float64(simulated)*0.50)-100, int64(float64(minTheoreticalVal)*0.85))
+	high := min(maxTheoreticalVal, int64(float64(simulated)*3.50)+500)
 
-	// For V1, cap the maximum at a realistic multiplier assumption rather than
-	// the theoretical 100% multiplier uptime (which V1 cannot verify).
-	// Assume at most 60% multiplier uptime as a generous but realistic cap.
-	realisticMaxTheoretical := int64(minTheoretical + (maxTheoretical-minTheoretical)*0.3)
-
-	// Ensure it never rejects within realistic physical limits
 	if low > minTheoreticalVal {
 		low = max(minTheoreticalVal-100, 0)
-	}
-	if high < realisticMaxTheoretical {
-		high = realisticMaxTheoretical
-	} else {
-		high = min(high, realisticMaxTheoretical)
 	}
 
 	return SimulateScoreResult{
@@ -112,7 +143,7 @@ func SimulateScore(events []models.InputEvent, totalTicks int, rngSeed int64, cl
 }
 
 // SimulateReplay dispatches simulation by replay version. Version 1 remains
-// heuristic for compatibility; version 2 has an exact multiplier timeline.
+// heuristic for compatibility, version 2 has an exact multiplier timeline.
 func SimulateReplay(version int, events []models.InputEvent, totalTicks int, rngSeed int64, claimedScore int64, baseDifficulty float64) (SimulateScoreResult, error) {
 	switch version {
 	case ReplayVersionV1:
@@ -124,13 +155,13 @@ func SimulateReplay(version int, events []models.InputEvent, totalTicks int, rng
 		if err := ValidateBaseDifficulty(baseDifficulty); err != nil {
 			return SimulateScoreResult{}, err
 		}
-		return simulateScoreV2(events, totalTicks, claimedScore, baseDifficulty), nil
+		return simulateScoreV2(events, totalTicks, rngSeed, claimedScore, baseDifficulty), nil
 	default:
 		return SimulateScoreResult{}, fmt.Errorf("unsupported replay version %d", version)
 	}
 }
 
-func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore int64, baseDifficulty float64) SimulateScoreResult {
+func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, claimedScore int64, baseDifficulty float64) SimulateScoreResult {
 	var (
 		minimumScore        float64
 		estimatedScore      float64
@@ -139,18 +170,26 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 		playerY             = InitialPlayerY
 		multiplierActive    bool
 		multiplierStartTick uint32
+		lastActionTick      = -1000
 	)
+
+	rng := NewLoveRNG(uint64(rngSeed))
 
 	for tick := 1; tick <= totalTicks; tick++ {
 		for inputIdx < len(events) && int(events[inputIdx].Tick) == tick {
 			switch events[inputIdx].InputID {
-			case models.INPUT_MULTIPLIER_STARTED:
+			case models.InputMultiplierStarted:
 				multiplierActive = true
 				multiplierStartTick = events[inputIdx].Tick
-			case models.INPUT_MULTIPLIER_ENDED:
+			case models.InputMultiplierEnded:
 				multiplierActive = false
-			case models.INPUT_BLIP:
-				playerY = calculateNextCircleY(playerY)
+			case models.InputBlip:
+				lastActionTick = tick
+				dist := rng.CircleDistance()
+				playerY = math.Max(-50.0, playerY-dist)
+			case models.InputPing:
+				lastActionTick = tick
+				playerY = math.Max(-50.0, playerY-18.0)
 			}
 			inputIdx++
 		}
@@ -158,6 +197,13 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 		// beyond the protocol's maximum duration.
 		if multiplierActive && uint64(tick)-uint64(multiplierStartTick) >= uint64(MaxMultiplierTicks) {
 			multiplierActive = false
+		}
+
+		// When player is actively inputting BLIPs/PINGs,
+		// player stays in upper region of screen.
+		effectiveY := playerY
+		if tick-lastActionTick < 90 {
+			effectiveY = math.Max(-30.0, playerY*0.5)
 		}
 
 		difficulty := difficultyAtTick(tick, baseDifficulty)
@@ -168,7 +214,7 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 		}
 
 		baseSpeedMin := difficulty * BaseScrollSpeed
-		baseSpeedEst := calculateBaseSpeed(difficulty, playerY)
+		baseSpeedEst := calculateBaseSpeed(difficulty, effectiveY)
 		baseSpeedMax := difficulty*BaseScrollSpeed + 2.10
 
 		minimumScore += baseSpeedMin * multiplier
@@ -182,12 +228,12 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, claimedScore in
 	}
 
 	simulated := int64(estimatedScore)
-	// V2 has an exact multiplier timeline from events, and accurate circle spacing physics (AverageCircleDist = 56.0).
+	// V2 has an exact multiplier timeline from events, and accurate circle spacing physics.
 	// Low bound allows for low-altitude play without height bonus (relative to physical minimum).
 	// High bound accommodates legitimate high-altitude play up to 1.40x simulated score,
 	// strictly bounded by the maximum theoretical 100% top-screen limit.
 	low := max(int64(float64(simulated)*0.70)-100, int64(minimumScore*0.85))
-	high := min(int64(maximumScore), int64(float64(simulated)*1.50)+300)
+	high := min(int64(maximumScore), int64(float64(simulated)*1.40)+300)
 
 	return SimulateScoreResult{
 		SimulatedScore: simulated,
@@ -215,8 +261,4 @@ func calculateBaseSpeed(difficulty, playerY float64) float64 {
 		baseSpeed += (HeightBonusThreshold - playerY) * HeightBonusCoefficient
 	}
 	return baseSpeed
-}
-
-func calculateNextCircleY(currentPlayerY float64) float64 {
-	return math.Max(-50.0, currentPlayerY-AverageCircleDist)
 }

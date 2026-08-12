@@ -48,8 +48,7 @@ func (h *ReportHandler) Submit(c *fiber.Ctx) error {
 
 	err = h.DB.InsertReport(c.Context(), scoreID, reporter, payload.Reason)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23503" { // foreign_key_violation
 			return c.Status(404).JSON(fiber.Map{"error": "score not found"})
 		}
 		log.Printf("ERROR: InsertReport failed: %v", err)
