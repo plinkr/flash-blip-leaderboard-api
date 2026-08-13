@@ -21,7 +21,7 @@ import (
 	"flash-blip-leaderboard-api/internal/validator"
 )
 
-var Version = "0.2.5"
+var Version = "0.2.6"
 
 func main() {
 	_ = godotenv.Load()

@@ -277,6 +277,8 @@ func TestMechanicalTimingSeparation(t *testing.T) {
 	// Set thresholds explicitly for testing
 	cfg.MaxPerfectRatio = 0.50
 	cfg.MaxPerfectPingRatio = 0.80
+	cfg.MinBlipSamplesForPerfect = 10
+	cfg.MinPingSamplesForPerfect = 10
 
 	// Create a replay with 25 BLIPs having identical 10-tick intervals.
 	// This should exceed cfg.MaxPerfectRatio (0.50) and fail.
@@ -342,6 +344,8 @@ func TestMaxBlipsAndPingsPerMinute(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MaxPerfectRatio = 1.1
 	cfg.MaxPerfectPingRatio = 1.1
+	cfg.MinBlipSamplesForRate = 10
+	cfg.MinPingSamplesForRate = 10
 
 	// Valid case within bounds (e.g. 2 blips/sec and 4 pings/sec in a 10s run)
 	// 10 seconds = 600 ticks

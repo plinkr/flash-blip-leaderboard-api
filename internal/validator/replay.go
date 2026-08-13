@@ -10,13 +10,17 @@ import (
 
 // Config adjust according to FLASH-BLIP real mechanics
 type Config struct {
-	MaxReplayVersion     int
-	MinTicksPerScore     float64 // minimum ticks for score to be possible
-	MaxBlipsPerMinute    float64 // maximum credible human BLIPs/min (~3/sec = 180/min)
-	MaxPingsPerMinute    float64 // maximum credible human PINGs/min (~5/sec = 300/min)
-	MinTicksBetweenBlips int     // minimum ticks between BLIPs (~6 ticks = 100ms at 60fps)
-	MaxPerfectRatio      float64 // ratio of identical BLIP intervals (indicates TAS)
-	MaxPerfectPingRatio  float64 // ratio of identical PING intervals (indicates TAS)
+	MaxReplayVersion         int
+	MinTicksPerScore         float64 // minimum ticks for score to be possible
+	MaxBlipsPerMinute        float64 // maximum credible human BLIPs/min (~3/sec = 180/min)
+	MaxPingsPerMinute        float64 // maximum credible human PINGs/min (~5/sec = 300/min)
+	MinTicksBetweenBlips     int     // minimum ticks between BLIPs (~6 ticks = 100ms at 60fps)
+	MaxPerfectRatio          float64 // ratio of identical BLIP intervals (indicates TAS)
+	MaxPerfectPingRatio      float64 // ratio of identical PING intervals (indicates TAS)
+	MinBlipSamplesForRate    int     // minimum BLIP count before checking rate limit
+	MinPingSamplesForRate    int     // minimum PING count before checking rate limit
+	MinBlipSamplesForPerfect int     // minimum BLIP count before checking mechanical timing (TAS)
+	MinPingSamplesForPerfect int     // minimum PING count before checking mechanical timing (TAS)
 }
 
 const (
@@ -40,13 +44,17 @@ var replayV2Magic = [4]byte{'F', 'B', 'R', 'P'}
 
 func DefaultConfig() *Config {
 	return &Config{
-		MaxReplayVersion:     ReplayVersionV2,
-		MinTicksPerScore:     0.5, // score cannot be > ticks * this_factor on average
-		MaxBlipsPerMinute:    120, // 2 BLIPs/sec
-		MaxPingsPerMinute:    240, // 4 PINGs/sec
-		MinTicksBetweenBlips: 0,   // disabled (was 6) to allow instant jumps with Phase Shift/invulnerability
-		MaxPerfectRatio:      0.8, // >80% identical intervals = suspicious
-		MaxPerfectPingRatio:  0.9, // >90% identical intervals = suspicious
+		MaxReplayVersion:         ReplayVersionV2,
+		MinTicksPerScore:         0.5, // score cannot be > ticks * this_factor on average
+		MaxBlipsPerMinute:        120, // 2 BLIPs/sec
+		MaxPingsPerMinute:        240, // 4 PINGs/sec
+		MinTicksBetweenBlips:     0,   // disabled (was 6) to allow instant jumps with Phase Shift/invulnerability
+		MaxPerfectRatio:          0.8, // >80% identical intervals = suspicious
+		MaxPerfectPingRatio:      0.9, // >90% identical intervals = suspicious
+		MinBlipSamplesForRate:    40,
+		MinPingSamplesForRate:    200,
+		MinBlipSamplesForPerfect: 100,
+		MinPingSamplesForPerfect: 250,
 	}
 }
 
@@ -247,36 +255,30 @@ func ValidateLight(cfg *Config, events []models.InputEvent, stats models.ReplayS
 		}
 	}
 
-	// BLIPs too frequent for a human
-	if stats.BlipCount > 0 {
-		blipsPerMinute := float64(stats.BlipCount) / (float64(totalTicks) / 60.0 / 60.0)
-		if blipsPerMinute > cfg.MaxBlipsPerMinute {
-			return fmt.Errorf("inhuman blip rate: %.1f blips/min (max %g)", blipsPerMinute, cfg.MaxBlipsPerMinute)
+	minutes := float64(totalTicks) / 3600.0
+	checks := []struct {
+		count, perfect, minRate, minPerfect int
+		maxPerMinute, maxPerfect            float64
+		name                                string
+	}{
+		{count: stats.BlipCount, perfect: stats.PerfectIntervals, minRate: cfg.MinBlipSamplesForRate, minPerfect: cfg.MinBlipSamplesForPerfect, maxPerMinute: cfg.MaxBlipsPerMinute, maxPerfect: cfg.MaxPerfectRatio, name: "blip"},
+		{count: stats.PingCount, perfect: stats.PerfectPingIntervals, minRate: cfg.MinPingSamplesForRate, minPerfect: cfg.MinPingSamplesForPerfect, maxPerMinute: cfg.MaxPingsPerMinute, maxPerfect: cfg.MaxPerfectPingRatio, name: "ping"},
+	}
+
+	for _, c := range checks {
+		// PINGs/BLIPs too frequent for a human
+		if c.count > c.minRate {
+			if rate := float64(c.count) / minutes; rate > c.maxPerMinute {
+				return fmt.Errorf("inhuman %s rate: %.1f %s/min (max %g)", c.name, rate, c.name, c.maxPerMinute)
+			}
+		}
+		// Too many identical PING/BLIP intervals
+		if c.count > c.minPerfect {
+			if ratio := float64(c.perfect) / float64(c.count); ratio > c.maxPerfect {
+				return fmt.Errorf("suspicious mechanical timing: %.1f%% identical %s intervals", ratio*100, c.name)
+			}
 		}
 	}
 
-	// PINGs too frequent for a human
-	if stats.PingCount > 0 {
-		pingsPerMinute := float64(stats.PingCount) / (float64(totalTicks) / 60.0 / 60.0)
-		if pingsPerMinute > cfg.MaxPingsPerMinute {
-			return fmt.Errorf("inhuman ping rate: %.1f pings/min (max %g)", pingsPerMinute, cfg.MaxPingsPerMinute)
-		}
-	}
-
-	// Mechanical pattern (TAS): too many identical BLIP intervals
-	if stats.BlipCount > 20 {
-		perfectRatio := float64(stats.PerfectIntervals) / float64(stats.BlipCount)
-		if perfectRatio > cfg.MaxPerfectRatio {
-			return fmt.Errorf("suspicious mechanical timing: %.1f%% identical blip intervals", perfectRatio*100)
-		}
-	}
-
-	// Mechanical pattern (TAS): too many identical PING intervals
-	if stats.PingCount > 20 {
-		perfectPingRatio := float64(stats.PerfectPingIntervals) / float64(stats.PingCount)
-		if perfectPingRatio > cfg.MaxPerfectPingRatio {
-			return fmt.Errorf("suspicious mechanical timing: %.1f%% identical ping intervals", perfectPingRatio*100)
-		}
-	}
 	return nil
 }
