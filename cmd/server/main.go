@@ -21,7 +21,7 @@ import (
 	"flash-blip-leaderboard-api/internal/validator"
 )
 
-var Version = "0.2.6"
+var Version = "0.2.7"
 
 func main() {
 	_ = godotenv.Load()
@@ -59,10 +59,16 @@ func main() {
 	go sh.RunPendingReplaySweeper(2 * time.Minute)
 	rh := &handlers.ReplayHandler{DB: database}
 	rph := &handlers.ReportHandler{DB: database}
+	gvh := &handlers.GameVersionHandler{URL: cfg.GameVersionURL, TTL: cfg.GameVersionTTL}
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
+
+	app.Get("/game_version",
+		middleware.UserAgent(cfg.AllowedUserAgents),
+		gvh.Get,
+	)
 
 	app.Get("/scores",
 		middleware.UserAgent(cfg.AllowedUserAgents),

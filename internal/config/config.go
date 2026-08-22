@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -13,6 +14,8 @@ type Config struct {
 	LeaderboardDepth  int
 	AllowedUserAgents []string
 	AllowedOrigins    string
+	GameVersionURL    string
+	GameVersionTTL    time.Duration
 }
 
 func Load() *Config {
@@ -49,6 +52,18 @@ func Load() *Config {
 		allowedOrigins = "*"
 	}
 
+	gameVersionURL := os.Getenv("GAME_VERSION_URL")
+	if gameVersionURL == "" {
+		gameVersionURL = "https://api.github.com/repos/plinkr/flash-blip/releases/latest"
+	}
+
+	gameVersionTTL := 10 * time.Minute
+	if raw := os.Getenv("GAME_VERSION_TTL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			gameVersionTTL = parsed
+		}
+	}
+
 	return &Config{
 		Port:              port,
 		DatabaseURL:       dbURL,
@@ -56,5 +71,7 @@ func Load() *Config {
 		LeaderboardDepth:  leaderboardDepth,
 		AllowedUserAgents: allowedUAs,
 		AllowedOrigins:    allowedOrigins,
+		GameVersionURL:    gameVersionURL,
+		GameVersionTTL:    gameVersionTTL,
 	}
 }
