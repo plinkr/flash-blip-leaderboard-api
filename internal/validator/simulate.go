@@ -11,12 +11,12 @@ const (
 	BaseScrollSpeed        = 0.08
 	TicksPerUnit           = 3600.0
 	DifficultyScale        = 1.5
-	BaseDifficulty         = 1.0 // default initial difficulty
+	BaseDifficulty         = 1.0
 	ScoreMultiplierFactor  = 4.0
 	InternalHeight         = 160.0
-	MinCircleDist          = InternalHeight / 4.0 // 40.0
-	InitialPlayerY         = -25.0                // average of -radius where radius ~20..30
-	HeightBonusThreshold   = InternalHeight / 2.0 // 80.0
+	MinCircleDist          = InternalHeight / 4.0
+	InitialPlayerY         = -25.0
+	HeightBonusThreshold   = InternalHeight / 2.0
 	HeightBonusCoefficient = 0.02
 )
 
@@ -76,7 +76,7 @@ func SimulateScore(events []models.InputEvent, totalTicks int, rngSeed int64, cl
 
 	var (
 		score          float64
-		playerY        = InitialPlayerY // starts at first circle position (-radius)
+		playerY        = InitialPlayerY
 		minTheoretical float64
 		maxTheoretical float64
 		inputIdx       int
@@ -112,12 +112,12 @@ func SimulateScore(events []models.InputEvent, totalTicks int, rngSeed int64, cl
 		// Absolute minimum: player does not jump (at bottom), without multipliers
 		minTheoretical += difficulty * BaseScrollSpeed
 
-		// Absolute maximum: player stays at top (y is approx -25 -> bonus = 2.1) and has 4x multiplier active 100% of the time
-		maxTheoretical += (difficulty*BaseScrollSpeed + 2.1) * ScoreMultiplierFactor
+		// Absolute maximum: player stays at top (y is approx -50 -> bonus = 2.60) and has 4x multiplier active 100% of the time
+		maxTheoretical += (difficulty*BaseScrollSpeed + 2.60) * ScoreMultiplierFactor
 
 		playerY += baseSpeedForScore
-		if playerY > InternalHeight {
-			playerY = InternalHeight
+		if playerY > InternalHeight-1.0 {
+			playerY = InternalHeight - 1.0
 		}
 	}
 
@@ -170,7 +170,6 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, 
 		playerY             = InitialPlayerY
 		multiplierActive    bool
 		multiplierStartTick uint32
-		lastActionTick      = -1000
 	)
 
 	rng := NewLoveRNG(uint64(rngSeed))
@@ -184,12 +183,10 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, 
 			case models.InputMultiplierEnded:
 				multiplierActive = false
 			case models.InputBlip:
-				lastActionTick = tick
-				dist := rng.CircleDistance()
-				playerY = math.Max(-50.0, playerY-dist)
-			case models.InputPing:
-				lastActionTick = tick
-				playerY = math.Max(-50.0, playerY-18.0)
+				radius := 20.0 + rng.RandomFloat()*10.0
+				spawnY := -radius
+				playerY = math.Min(spawnY, playerY-40.0)
+				playerY = math.Max(-50.0, playerY)
 			}
 			inputIdx++
 		}
@@ -197,13 +194,6 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, 
 		// beyond the protocol's maximum duration.
 		if multiplierActive && uint64(tick)-uint64(multiplierStartTick) >= uint64(MaxMultiplierIntervalTicks) {
 			multiplierActive = false
-		}
-
-		// When player is actively inputting BLIPs/PINGs,
-		// player stays in upper region of screen.
-		effectiveY := playerY
-		if tick-lastActionTick < 90 {
-			effectiveY = math.Max(-30.0, playerY*0.5)
 		}
 
 		difficulty := difficultyAtTick(tick, baseDifficulty)
@@ -214,26 +204,33 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, 
 		}
 
 		baseSpeedMin := difficulty * BaseScrollSpeed
-		baseSpeedEst := calculateBaseSpeed(difficulty, effectiveY)
-		baseSpeedMax := difficulty*BaseScrollSpeed + 2.10
+		baseSpeedEst := calculateBaseSpeed(difficulty, playerY)
+		baseSpeedMax := difficulty*BaseScrollSpeed + 2.60
 
 		minimumScore += baseSpeedMin * multiplier
 		estimatedScore += baseSpeedEst * multiplier
 		maximumScore += baseSpeedMax * multiplier
 
 		playerY += baseSpeedEst
-		if playerY > InternalHeight {
-			playerY = InternalHeight
+		if playerY > InternalHeight-1.0 {
+			playerY = InternalHeight - 1.0
 		}
 	}
 
 	simulated := int64(estimatedScore)
-	// V2 has an exact multiplier timeline from events, and accurate circle spacing physics.
-	// Low bound allows for low-altitude play without height bonus (relative to physical minimum).
-	// High bound accommodates legitimate high-altitude play up to 1.40x simulated score,
-	// strictly bounded by the maximum theoretical 100% top-screen limit.
-	low := max(int64(float64(simulated)*0.70)-100, int64(minimumScore*0.85))
-	high := min(int64(maximumScore), int64(float64(simulated)*1.40)+300)
+	minVal := int64(minimumScore)
+	maxVal := int64(maximumScore)
+
+	// Low tolerance: player may play conservatively (lower altitude, less height bonus),
+	// but cannot score less than minimum theoretical scroll distance.
+	low := max(int64(float64(simulated)*0.60)-100, int64(float64(minVal)*0.90))
+	if low > minVal {
+		low = max(minVal-100, 0)
+	}
+
+	// High tolerance: player may play aggressively at top of screen (higher height bonus),
+	// bounded by physical maximum theoretical score (100% top altitude).
+	high := min(maxVal, int64(float64(simulated)*1.40)+500)
 
 	return SimulateScoreResult{
 		SimulatedScore: simulated,
