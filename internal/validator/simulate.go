@@ -195,7 +195,7 @@ func simulateScoreV2(events []models.InputEvent, totalTicks int, rngSeed int64, 
 		}
 		// A missing end event must not extend a client-declared multiplier
 		// beyond the protocol's maximum duration.
-		if multiplierActive && uint64(tick)-uint64(multiplierStartTick) >= uint64(MaxMultiplierTicks) {
+		if multiplierActive && uint64(tick)-uint64(multiplierStartTick) >= uint64(MaxMultiplierIntervalTicks) {
 			multiplierActive = false
 		}
 

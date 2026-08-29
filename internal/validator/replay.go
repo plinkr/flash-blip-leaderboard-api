@@ -24,9 +24,11 @@ type Config struct {
 }
 
 const (
-	ReplayVersionV1    = 1
-	ReplayVersionV2    = 2
-	MaxMultiplierTicks = 30 * 60
+	ReplayVersionV1            = 1
+	ReplayVersionV2            = 2
+	MaxMultiplierTicks         = 30 * 60
+	MultiplierGraceTicks       = 6 * 60
+	MaxMultiplierIntervalTicks = MaxMultiplierTicks + MultiplierGraceTicks
 
 	// V2 replay format header constants (8 bytes total):
 	// [0-3]: Magic bytes "FBRP" (FlashBlip RePlay)
@@ -129,7 +131,9 @@ func ValidateV2(events []models.InputEvent, totalTicks int) error {
 		case models.InputBlip, models.InputPing:
 		case models.InputMultiplierStarted:
 			if multiplierActive {
-				return fmt.Errorf("multiplier started while already active at index %d", i)
+				if uint64(event.Tick)-uint64(multiplierStartTick) > uint64(MaxMultiplierIntervalTicks) {
+					return fmt.Errorf("multiplier interval exceeds %d ticks before refresh at index %d", MaxMultiplierIntervalTicks, i)
+				}
 			}
 			multiplierActive = true
 			multiplierStartTick = event.Tick
@@ -137,16 +141,16 @@ func ValidateV2(events []models.InputEvent, totalTicks int) error {
 			if !multiplierActive {
 				return fmt.Errorf("multiplier ended while inactive at index %d", i)
 			}
-			if uint64(event.Tick)-uint64(multiplierStartTick) > uint64(MaxMultiplierTicks) {
-				return fmt.Errorf("multiplier interval exceeds %d ticks at index %d", MaxMultiplierTicks, i)
+			if uint64(event.Tick)-uint64(multiplierStartTick) > uint64(MaxMultiplierIntervalTicks) {
+				return fmt.Errorf("multiplier interval exceeds %d ticks at index %d", MaxMultiplierIntervalTicks, i)
 			}
 			multiplierActive = false
 		default:
 			return fmt.Errorf("unknown v2 input id %d at index %d", event.InputID, i)
 		}
 	}
-	if multiplierActive && uint64(totalTicks)-uint64(multiplierStartTick) > uint64(MaxMultiplierTicks) {
-		return fmt.Errorf("multiplier interval exceeds %d ticks without an end event", MaxMultiplierTicks)
+	if multiplierActive && int64(totalTicks)-int64(multiplierStartTick) > int64(MaxMultiplierIntervalTicks) {
+		return fmt.Errorf("multiplier interval exceeds %d ticks without an end event", MaxMultiplierIntervalTicks)
 	}
 	return nil
 }

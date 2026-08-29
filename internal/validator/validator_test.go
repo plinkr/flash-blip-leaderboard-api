@@ -160,21 +160,63 @@ func TestParseAndValidateReplayV2(t *testing.T) {
 
 func TestValidateV2MultiplierLifetime(t *testing.T) {
 	withinWindow := []models.InputEvent{{Tick: 1, InputID: models.InputMultiplierStarted}}
-	if err := ValidateV2(withinWindow, MaxMultiplierTicks+1); err != nil {
+	if err := ValidateV2(withinWindow, MaxMultiplierIntervalTicks+1); err != nil {
 		t.Fatalf("expected an omitted end event within the lifetime to pass: %v", err)
 	}
 
 	tooLong := []models.InputEvent{{Tick: 1, InputID: models.InputMultiplierStarted}}
-	if err := ValidateV2(tooLong, MaxMultiplierTicks+2); err == nil {
+	if err := ValidateV2(tooLong, MaxMultiplierIntervalTicks+2); err == nil {
 		t.Fatal("expected an omitted end event past the lifetime to fail")
 	}
 
-	refresh := []models.InputEvent{
-		{Tick: 1, InputID: models.InputMultiplierStarted},
-		{Tick: 2, InputID: models.InputMultiplierStarted},
+	trailingTick := []models.InputEvent{{Tick: 101, InputID: models.InputMultiplierStarted}}
+	if err := ValidateV2(trailingTick, 100); err != nil {
+		t.Fatalf("expected multiplier started at totalTicks+1 to pass validation: %v", err)
 	}
-	if err := ValidateV2(refresh, 60); err == nil {
-		t.Fatal("expected multiplier refresh without an end event to fail")
+
+	refreshValid := []models.InputEvent{
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: 1000, InputID: models.InputMultiplierStarted},
+		{Tick: 2500, InputID: models.InputMultiplierEnded},
+	}
+	if err := ValidateV2(refreshValid, 3000); err != nil {
+		t.Fatalf("expected valid multiplier refresh without end event to pass: %v", err)
+	}
+
+	refreshWithEnd := []models.InputEvent{
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: 1000, InputID: models.InputMultiplierEnded},
+		{Tick: 1000, InputID: models.InputMultiplierStarted},
+		{Tick: 2500, InputID: models.InputMultiplierEnded},
+	}
+	if err := ValidateV2(refreshWithEnd, 3000); err != nil {
+		t.Fatalf("expected valid multiplier refresh with end event to pass: %v", err)
+	}
+
+	refreshTooLate := []models.InputEvent{
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: uint32(MaxMultiplierIntervalTicks + 2), InputID: models.InputMultiplierStarted},
+	}
+	if err := ValidateV2(refreshTooLate, MaxMultiplierIntervalTicks*2); err == nil {
+		t.Fatal("expected refresh after expired interval to fail")
+	}
+
+	endTooLate := []models.InputEvent{
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: uint32(MaxMultiplierIntervalTicks + 2), InputID: models.InputMultiplierEnded},
+	}
+	if err := ValidateV2(endTooLate, MaxMultiplierIntervalTicks*2); err == nil {
+		t.Fatal("expected end event past allowed interval to fail")
+	}
+
+	chained := []models.InputEvent{
+		{Tick: 100, InputID: models.InputMultiplierStarted},
+		{Tick: 1500, InputID: models.InputMultiplierStarted},
+		{Tick: 3000, InputID: models.InputMultiplierStarted},
+		{Tick: 4800, InputID: models.InputMultiplierEnded},
+	}
+	if err := ValidateV2(chained, 6000); err != nil {
+		t.Fatalf("expected chained multipliers to pass validation: %v", err)
 	}
 }
 
@@ -207,6 +249,17 @@ func TestSimulateReplayV2MultiplierWindow(t *testing.T) {
 	// Golden values updated for accurate height-bonus simulation
 	if noMultiplier.SimulatedScore != 76 || withMultiplier.SimulatedScore != 225 {
 		t.Fatalf("unexpected v2 golden scores: no=%d with=%d", noMultiplier.SimulatedScore, withMultiplier.SimulatedScore)
+	}
+
+	// Chained multipliers in simulation should maintain 4x across the extended window
+	chainedEvents := []models.InputEvent{
+		{Tick: 1, InputID: models.InputMultiplierStarted},
+		{Tick: 30, InputID: models.InputMultiplierStarted},
+		{Tick: 60, InputID: models.InputMultiplierEnded},
+	}
+	withChained := simulateScoreV2ForTest(t, chainedEvents, 60)
+	if withChained.SimulatedScore <= withMultiplier.SimulatedScore {
+		t.Fatalf("chained multiplier should yield higher score than single: chained=%d single=%d", withChained.SimulatedScore, withMultiplier.SimulatedScore)
 	}
 }
 
